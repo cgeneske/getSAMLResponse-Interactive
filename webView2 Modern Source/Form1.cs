@@ -46,7 +46,7 @@ namespace getSAMLResponse
         //Addresses potential race condition, preventing POST of SAMLResponse to PAM which would invalidate the assertion (triggering replay detection if subsequently attempted)
         private void CoreWebView2_NavigationStarting(object sender, CoreWebView2NavigationStartingEventArgs e)
         {
-            if (e.Uri.Contains("PasswordVault/api/auth/saml/logon"))
+            if (e.Uri.ToLower().Contains("passwordvault/api/auth/saml/logon"))
             {
                 e.Cancel = true;
             }
