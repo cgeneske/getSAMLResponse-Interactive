@@ -33,6 +33,8 @@ namespace getSAMLResponse
             {
                 string[] args = Environment.GetCommandLineArgs();
                 string idpURL = args[1];
+                webView.CoreWebView2.NavigationStarting += CoreWebView2_NavigationStarting;
+                webView.CoreWebView2.NavigationCompleted += CoreWebView2_NavigationCompleted;
                 webView.CoreWebView2.Navigate(idpURL);
             }
             else
@@ -40,64 +42,42 @@ namespace getSAMLResponse
                 throw new InvalidOperationException("No URL Passed. Must pass an IDP URL into app to start SAML Authentication process.");
             }
         }
-        //wait for a specific URL to be true based on the filter. In CyberArk example, there is a post to either api/auth/saml/logon or /auth/saml, both should match successfully.
+
+        //Addresses potential race condition, preventing POST of SAMLResponse to PAM which would invalidate the assertion (triggering replay detection if subsequently attempted)
+        private void CoreWebView2_NavigationStarting(object sender, CoreWebView2NavigationStartingEventArgs e)
+        {
+            if (e.Uri.Contains("PasswordVault/api/auth/saml/logon"))
+            {
+                e.Cancel = true;
+            }
+        }
+
+        //Parse document body and scrape the SAMLResponse if the intended action would be a POST to CyberArk PAM
+        private async void CoreWebView2_NavigationCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            string htmlEncoded = await webView.CoreWebView2.ExecuteScriptAsync("document.body.outerHTML");
+            string htmlDecoded = Regex.Unescape(htmlEncoded);
+            string regexAction = @"<form[^>]*action=""https:\/\/.+\/PasswordVault\/api\/auth\/saml\/logon""";
+            Match actionMatch = Regex.Match(htmlDecoded, regexAction, RegexOptions.IgnoreCase);
+            if (actionMatch.Success)
+            {
+                string regexSAML = @"(?<=name=""SAMLResponse""\svalue="")[^""]+";
+                Match m = Regex.Match(htmlDecoded, regexSAML, RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    Console.Out.WriteLine(m.Value);
+                    System.Windows.Forms.Application.Exit();
+                }
+                else
+                {
+                    throw new InvalidOperationException("Unable to match SAML Response to regex.");
+                }
+            }
+        }
+
         async void InitializeAsync()
         {
             await webView.EnsureCoreWebView2Async(null);
-            string filter = "*auth/saml*";
-            webView.CoreWebView2.AddWebResourceRequestedFilter(filter,
-                CoreWebView2WebResourceContext.Document);
-            webView.CoreWebView2.WebResourceRequested += CoreWebView2_WebResourceRequested;
-        }
-
-        //Get the content of the post request, stop navigation, decode the content and check that it matches Regex for a response. If does exit app.
-        private void CoreWebView2_WebResourceRequested(object sender, CoreWebView2WebResourceRequestedEventArgs e)
-        {
-            string postData = null;
-            var content = e.Request.Content;
-
-            if (content != null)
-            {
-                using (var ms = new MemoryStream())
-                {
-                    content.CopyTo(ms);
-                    postData = Encoding.UTF8.GetString(ms.ToArray());
-                    postData = HttpUtility.HtmlDecode(postData);
-                }
-                webView.NavigationStarting += StopNavigation;
-                string decodedSAML = HttpUtility.UrlDecode(postData);
-                int indexOfPostData = decodedSAML.IndexOf("&RelayState");
-                if (indexOfPostData >= 0)
-                    decodedSAML = decodedSAML.Remove(indexOfPostData);
-
-
-                if (decodedSAML != null)
-                {
-                    string regexPatern = @"(?<=SAMLResponse=)(?s)(.*)";
-                    Match m = Regex.Match(decodedSAML, regexPatern, RegexOptions.IgnoreCase);
-                    if (m.Success)
-                    {
-                        Console.Out.WriteLine(m.Value);
-                        System.Windows.Forms.Application.Exit();
-                    }
-                    else
-                    {
-                        throw new InvalidOperationException("Unable to match SAML Response to regex.");
-                    }
-
-                }
-            }
-            else
-            {
-                throw new InvalidOperationException("Unable to find SAML Response content");
-            }
-
-        }
-
-        //Stop webview from continuing navigation.
-        void StopNavigation(object sender, CoreWebView2NavigationStartingEventArgs args)
-        {
-            args.Cancel = true;
         }
 
         private void Form1_Load(object sender, EventArgs e)
